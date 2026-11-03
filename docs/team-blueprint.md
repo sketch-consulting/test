@@ -124,6 +124,10 @@
 
 ## 7. ここから始める
 
+> **注意**: `CLAUDE.md` と `.claude/agents/*.md` は、セッションの開始時に読み込まれます。
+> これらや `.claude/settings.json` を変更したら、新しいセッションを開始してから試してください。
+> 古いセッションのままだと、変更前の手順で動きます（試行記録 `docs/trials/2026-11-03-dry-run.md` で実際に起きた）。
+
 1. `CLAUDE.md` の「プロジェクト情報」の TODO を埋める。
 2. `scripts/check.config` に必須の lint・型検査・テストを書き、`scripts/check.sh` が終了コード 0 になるまで直す。
 3. 安全装置の自己テストを実行する（`jq` が必要）: `scripts/selftest.sh`
