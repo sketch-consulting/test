@@ -1,33 +1,60 @@
 #!/usr/bin/env bash
-# 品質ゲート: lint・型検査・テストをまとめて実行する。1 つでも失敗したら非ゼロで終わる。
-# 何も設定されていない場合も失敗させる（「チェックが無いので通過」を防ぐため）。
-# プロジェクトに合わせて自由に書き換えてよい。
+# 品質ゲート: scripts/check.config に書かれた必須チェック（lint・型検査・テスト）を実行する。
+#
+# 終了コード
+#   0 … 必須 3 項目がすべて「実行して成功」または「NA:<理由> と明示」
+#   1 … どれかが実行されて失敗した
+#   2 … どれかが未設定（空、NA の理由なし、設定ファイルなし）。成功扱いにはしない
+#
+# 環境変数 CHECK_CONFIG で設定ファイルの場所を変えられる（自己テスト用）。
 set -uo pipefail
-cd "$(git rev-parse --show-toplevel)"
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$root"
+config="${CHECK_CONFIG:-$root/scripts/check.config}"
 
-ran=0; failed=0
-run() {
-  echo "▶ $*"
-  ran=1
-  if ! "$@"; then echo "✖ 失敗: $*"; failed=1; fi
-}
-
-has_npm_script() { node -e "process.exit(require('./package.json').scripts?.['$1']?0:1)" 2>/dev/null; }
-
-if [ -f package.json ]; then
-  for s in lint typecheck test; do
-    has_npm_script "$s" && run npm run --silent "$s"
-  done
+if [ ! -f "$config" ]; then
+  echo "✖ 設定ファイルがありません: $config"
+  echo "  scripts/check.config を作り、CHECK_LINT / CHECK_TYPECHECK / CHECK_TEST を設定してください。"
+  exit 2
 fi
 
-if [ -f pyproject.toml ] || [ -f requirements.txt ]; then
-  command -v ruff   >/dev/null && run ruff check .
-  command -v mypy   >/dev/null && [ -f mypy.ini -o -f pyproject.toml ] && run mypy .
-  command -v pytest >/dev/null && run pytest -q
-fi
+# 設定を読む（source はしない。KEY=値 の行だけを文字列として取り出す）
+get() { grep -E "^$1=" "$config" | tail -n 1 | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
 
-if [ "$ran" -eq 0 ]; then
-  echo "✖ 実行できるチェックがありません。scripts/check.sh をプロジェクトに合わせて設定してください。"
+required=(CHECK_LINT CHECK_TYPECHECK CHECK_TEST)
+label() { case "$1" in CHECK_LINT) echo lint;; CHECK_TYPECHECK) echo typecheck;; CHECK_TEST) echo test;; esac; }
+
+declare -A result
+unconfigured=0; failed=0
+
+for key in "${required[@]}"; do
+  cmd="$(get "$key")"
+  name="$(label "$key")"
+  if [ -z "$cmd" ]; then
+    result[$key]="未設定"; unconfigured=1; continue
+  fi
+  if [[ "$cmd" == NA:* ]]; then
+    reason="${cmd#NA:}"; reason="${reason#"${reason%%[![:space:]]*}"}"
+    if [ -z "$reason" ]; then result[$key]="未設定（NA の理由が空）"; unconfigured=1
+    else result[$key]="対象外（$reason）"; fi
+    continue
+  fi
+  echo "▶ [$name] $cmd"
+  if bash -c "$cmd"; then result[$key]="成功"
+  else result[$key]="失敗"; failed=1; fi
+done
+
+echo
+echo "── 品質チェック結果 ──"
+for key in "${required[@]}"; do printf '  %-10s %s\n' "$(label "$key")" "${result[$key]}"; done
+
+if [ "$failed" -eq 1 ]; then
+  echo "✖ 失敗したチェックがあります。"
   exit 1
 fi
-[ "$failed" -eq 0 ] && echo "✔ すべてのチェックが通りました" || exit 1
+if [ "$unconfigured" -eq 1 ]; then
+  echo "✖ 未設定の必須チェックがあります。scripts/check.config を設定してください（成功扱いにはしません）。"
+  exit 2
+fi
+echo "✔ 必須チェックはすべて通りました"
+exit 0
