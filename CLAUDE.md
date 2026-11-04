@@ -33,19 +33,28 @@ Codex など他の AI ツールはこのファイルもフックも読みませ�
 
 ## 作業環境（git worktree）
 
-- 1 タスク × 1 役割 = 1 worktree。作成は `scripts/new-worktree.sh <task-id> <role>`。
-  - implementer: ブランチ `agent/<task-id>/implementer` を作る（ここに実装をコミットする）
-  - verifier: 作業用ブランチを作らず、検証対象のコミットを detached で取り出すための worktree
-  - reviewer: worktree は不要（統括役の作業ツリーから git の読み取りだけで見る）
-  - 場所: `../wt/<task-id>-<role>`
+- 1 タスク × 1 役割 = 1 worktree。作るのは統括役で、`scripts/new-worktree.sh` を使う。場所は `../wt/<task-id>-<role>`。
+
+| 役割 | 作り方 | ブランチ | 書き込める人 |
+|---|---|---|---|
+| implementer | `new-worktree.sh <id> implementer` | `agent/<id>/implementer`（main から） | implementer だけ |
+| reviewer | `new-worktree.sh <id> reviewer <hash>` | なし（レビュー対象のコミットに固定） | 誰も書かない |
+| verifier | `new-worktree.sh <id> verifier` | なし（検証時に対象コミットへ切り替える） | 誰も書かない |
+| integration | `new-worktree.sh <id> integration <hash>` | `task/<id>`（**検証済みコミット** から） | 統括役だけ |
+
 - worktree 間で共有されるのは **コミットだけ**。未コミットのファイルは他の役から見えない。
+- 統括役の作業場所（リポジトリ本体）は main のまま。レビューや検証をここで読むと、実装ではなく main を見てしまう。
+- `agent/<id>/implementer` には、implementer 以外は書かない（統括役も書かない）。
+  統括役の記録は、検証済みコミットから分けた `task/<id>` に積む。PR は `task/<id>` から出す。
 
 ## 引き継ぎ記録（統括役だけが書く）
 
 - 各役は結果を **返答として** 統括役に返す。ファイルには書かない（reviewer / verifier は書き込み禁止のため）。
 - 統括役が返答を集約し、`docs/handoff/<task-id>.md`（書式は `docs/handoff/TEMPLATE.md`）に記録する。
-- 記録は最後に PR ブランチへ統括役がコミットし、PR 本文にも要約を載せる。
+- 記録は統合用ブランチ `task/<id>` に統括役がコミットし、PR 本文にも要約を載せる。
   人は PR だけを見れば、根拠と残る判断をまとめて確認できるようにする。
+- `task/<id>` の、検証済みコミットからの差分は `docs/handoff/<id>.md` だけにする（`git diff --name-only <hash> task/<id>` で確認）。
+  コードの変更が必要になったら、`task/<id>` で直さずに implementer へ差し戻す。
 
 ## コミット規約
 
@@ -59,14 +68,17 @@ Codex など他の AI ツールはこのファイルもフックも読みませ�
    受け入れ条件が曖昧な新機能・リファクタ・移行は、先に `grilling` スキルで人に質問し、合意してから書く。
 2. **準備**: `scripts/new-worktree.sh <id> implementer` と `scripts/new-worktree.sh <id> verifier`。
 3. **実装**: `implementer` に依頼する。BLOCKED が返ったら、その時点で止めて人に判断を仰ぐ。
-4. **レビュー**: `reviewer` に、ブランチ名と implementer が返した HEAD のハッシュを渡す。
+4. **レビュー**: `scripts/new-worktree.sh <id> reviewer <hash>` でレビュー用の作業場所を作り、
+   `reviewer` にそのパスと、implementer が返した HEAD のハッシュを渡す。
+   差し戻し後に再レビューするときは、新しいハッシュで作業場所を作り直す（task-id に `-r2` などを付ける）。
 5. **検証**: `verifier` に、検証用 worktree・同じハッシュ・reviewer の TEST_GAPS を渡す。
 6. **変更なしの確認**: reviewer / verifier の終了後に次を確認する。変化があれば、その結果は採用せずに人へ報告する。
-   - `git -C <verifier の worktree> status --porcelain` が空であること
+   - `git -C <reviewer / verifier の worktree> status --porcelain` が空であること
    - 統括役の作業ツリーの `git status --porcelain` が、依頼前と同じであること
    - 実装ブランチの HEAD が、依頼時のハッシュから変わっていないこと
 7. **差し戻し**: reviewer が CHANGES_REQUESTED、または verifier が FAIL / FLAKY なら、指摘を添えて implementer に戻す。
    差し戻しは **最大 2 回**（実装は合計 3 回まで）。3 回目の実装後もどちらかが PASS でなければ止めて、人に判断を仰ぐ。
    BLOCK / BLOCKED / 品質チェックの未設定（終了コード 2）は、回数に関係なくその場で止める。
-8. **集約と PR**: 引き継ぎ記録を仕上げてコミットし、push して **ドラフト PR** を作る。
+8. **集約と PR**: 両方 PASS になったコミット（検証済みコミット）から `scripts/new-worktree.sh <id> integration <hash>` で
+   `task/<id>` を作り、引き継ぎ記録をコミットする。差分が記録だけであることを確認してから push し、`task/<id>` から **ドラフト PR** を作る。
    PR 本文は「結論 / 根拠（実行コマンドと結果）/ 未確認事項 / 人の判断が必要なこと」で構成する。マージは人が行う。

@@ -57,11 +57,14 @@
 2. 準備      scripts/new-worktree.sh <id> implementer
              scripts/new-worktree.sh <id> verifier
 3. 実装      implementer: 再現テスト(赤) → 最小修正 → check.sh(緑) → コミット
-4. 相互レビュー reviewer: main...ブランチ の diff を監査 → PASS / CHANGES_REQUESTED / BLOCK（返答で返す）
+4. 相互レビュー 統括役が new-worktree.sh <id> reviewer <hash> で対象コミットに固定した作業場所を作る
+             reviewer: その作業場所で main...<hash> の diff を監査 → PASS / CHANGES_REQUESTED / BLOCK（返答で返す）
 5. 検証      verifier: 対象コミットを detached で取り出し check.sh を再実行。例外ケースと main との回帰差分を見る
 5'. 確認     統括役: reviewer / verifier の終了後、変更が残っていないことを git status と HEAD で確認
 6. 差し戻し   4 か 5 が NG → implementer に戻す（最大 2 回。3 回目は人に判断を仰ぐ）
-7. PR        統括役が返答を handoff/<id>.md に集約してコミットし、push してドラフト PR を作成。本文は結論・根拠・未確認事項・人の判断が必要なこと
+7. PR        統括役が new-worktree.sh <id> integration <検証済み hash> で task/<id> を作り、
+             返答を handoff/<id>.md に集約してコミット（差分は記録だけ）。push して task/<id> からドラフト PR を作成。
+             本文は結論・根拠・未確認事項・人の判断が必要なこと。agent/<id>/implementer には統括役も書かない
 8. 承認      人が PR を確認してマージ。worktree を片付ける: git worktree remove ../wt/<id>-*
 ```
 

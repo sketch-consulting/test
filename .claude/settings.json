@@ -11,7 +11,8 @@
       "Bash(scripts/new-worktree.sh:*)",
       "Bash(scripts/selftest.sh)",
       "Bash(bash tests/check.test.sh)",
-      "Bash(bash tests/guard-bash.test.sh)"
+      "Bash(bash tests/guard-bash.test.sh)",
+      "Bash(bash tests/new-worktree.test.sh)"
     ],
     "ask": [
       "Bash(git push:*)",
