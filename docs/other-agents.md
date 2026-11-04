@@ -10,7 +10,7 @@ CLAUDE.md・フック・権限ルール・サブエージェントは自動で�
 | `scripts/new-worktree.sh` | git の機能だけを使う |
 | `docs/handoff/TEMPLATE.md` | 書式なので、誰が書いても使える |
 | 役割分担・差し戻し上限・PR で人が判断する、という運用 | 考え方として移せる |
-| GitHub 側の保護（`docs/safety-boundaries.md` の 4 章） | GitHub が強制するので、ツールに関係なく効く。**複数の AI を使うなら最優先** |
+| GitHub 側の保護（`docs/safety-boundaries.md` の 4 章） | GitHub が強制するので、ツールに関係なく効く。**複数の AI を使うなら最優先**。ただし同じアカウントを使う限り、AI と人の区別はできない |
 
 ## Codex で別途設定が必要なもの
 | Claude Code | Codex で必要なこと |
