@@ -34,7 +34,27 @@ blocked "cat .env"
 blocked "grep . .env.local"
 blocked "source ./.env"
 
+# 引用符・複数パス（dot の独立確認で見つかったケース。文字列をフックに渡すだけで、ファイルは読まない）
+blocked 'cat ".env"'
+blocked "cat '.env'"
+blocked 'cat .env .env.example'
+blocked 'cat .env.example .env'
+blocked 'cat ".env.local"'
+blocked 'head -n1 ./config/.env'
+blocked 'cat <.env'
+blocked 'git push origin "HEAD:main"'
+blocked "git push origin 'main'"
+blocked 'git push origin "HEAD:refs/heads/main"'
+blocked 'git push "origin" "main"'
+blocked 'git push origin HEAD:main && echo done'
+
 allowed "git status"
+allowed 'cat .env.example'
+allowed 'cat ".env.example" .env.sample'
+allowed 'ls .envrc'
+allowed 'git push origin "agent/T-1/implementer"'
+allowed 'git push origin feature/main-menu'
+allowed 'echo "update maintenance doc"'
 allowed "npm test"
 allowed "git push -u origin agent/T-1/implementer"
 allowed "cp .env.example .env.sample"
@@ -47,6 +67,16 @@ limit "bash cleanup.sh"                           # スクリプトファイル�
 limit "node -e 'require(\"fs\").unlinkSync(\"a\")'" # 別言語からの単発削除
 limit "echo x > src/a.js"                         # Bash 経由の書き込み（読み取り専用の役でも止まらない）
 limit "base64 -d <<< Y2F0IC5lbnY= | sh"           # 難読化
+
+# jq がない環境（python3 で取り出す経路）と、どちらもない環境（JSON 全体を見る経路）
+json='{"tool_name":"Bash","tool_input":{"command":"git push origin \"HEAD:main\""}}'
+for tools in "bash tr grep cat python3" "bash tr grep cat"; do
+  d="$(mktemp -d)"; for c in $tools; do ln -s "$(command -v "$c")" "$d/$c"; done
+  printf '%s' "$json" | env PATH="$d" bash "$hook" 2>/dev/null; got=$?
+  [ "$got" = 2 ] && { pass=$((pass+1)); echo "ok   止める     | [PATH: $tools] git push origin \"HEAD:main\""; } \
+                 || { fail=$((fail+1)); echo "FAIL 止まらない | [PATH: $tools] git push origin \"HEAD:main\""; }
+  command rm -r -- "$d"
+done
 
 echo "guard-bash.sh: $pass 件成功 / $fail 件失敗"
 [ "$fail" -eq 0 ]
