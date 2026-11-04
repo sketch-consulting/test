@@ -1,12 +1,15 @@
 # CLAUDE.md — 自律型AI開発チーム 共通ルール
 
-このファイルはすべてのセッション・サブエージェントが最初に読む共通ルールです。
-チーム設計の全体像は `docs/team-blueprint.md` を参照してください。
+このファイルは **Claude Code** のすべてのセッション・サブエージェントが最初に読む共通ルールです。
+Codex など他の AI ツールはこのファイルもフックも読みません（`docs/other-agents.md` を参照）。
+チーム設計の全体像は `docs/team-blueprint.md`、安全装置で防げる範囲は `docs/safety-boundaries.md` を参照してください。
 
 ## プロジェクト情報（導入時に必ず埋める）
 
 - 技術構成: TODO（例: TypeScript / Node 20 / PostgreSQL）
-- 品質ゲート: `scripts/check.sh`（lint・型検査・テストをまとめて実行。これが通らない変更は完了扱いにしない）
+- 品質ゲート: `scripts/check.sh`。必須の lint・型検査・テストは `scripts/check.config` に書く。
+  - 終了コード 0 = 成功、1 = 失敗、2 = 未設定。0 以外の変更は完了扱いにしない。
+  - 現在は未設定のため、常に 2 を返す。
 - 既定ブランチ: `main`
 
 ## 最優先の原則
@@ -18,26 +21,40 @@
 ## 禁止事項（人の明示的な承認なしに実行しない）
 
 - 破壊的コマンド: `rm -rf`、`git push --force` / `-f`、`git reset --hard`、`git clean -f`、`DROP` / `TRUNCATE` 文
-- `main` への直接 push、PR のマージ
+- `main` への直接 push、PR のマージ、GitHub の権限・保護設定の変更
 - DB スキーマ移行、課金が発生する外部 API の呼び出し、依存パッケージの追加
+- `scripts/check.config` の変更（必須チェックを外す・NA にすることを含む）
 - 他エージェントの worktree・ブランチへの書き込み
 - テストの削除・skip・無効化、アサーションを弱めて通すこと
 - `.env`、秘密情報、API キー、環境変数の値をログ・コミット・PR 本文に出すこと
 
-※ 上記の一部は `.claude/settings.json` と `.claude/hooks/guard-bash.sh` で機械的にも止めています。
+※ 一部は `.claude/settings.json` とフックで機械的にも止めますが、完全ではありません。
+  機械的に止まらなくても、ここに書いた約束は守ること。
 
 ## 作業環境（git worktree）
 
-- 1 タスク × 1 役割 = 1 worktree = 1 ブランチ。
-- 作成は必ず `scripts/new-worktree.sh <task-id> <role>` を使う。
-  - ブランチ: `agent/<task-id>/<role>`
-  - 場所: `../wt/<task-id>-<role>`
-- 自分に割り当てられた worktree の外のファイルは編集しない。
+- 1 タスク × 1 役割 = 1 worktree。作るのは統括役で、`scripts/new-worktree.sh` を使う。場所は `../wt/<task-id>-<role>`。
 
-## 引き継ぎ（共有メモリ）
+| 役割 | 作り方 | ブランチ | 書き込める人 |
+|---|---|---|---|
+| implementer | `new-worktree.sh <id> implementer` | `agent/<id>/implementer`（main から） | implementer だけ |
+| reviewer | `new-worktree.sh <id> reviewer <hash>` | なし（レビュー対象のコミットに固定） | 誰も書かない |
+| verifier | `new-worktree.sh <id> verifier` | なし（検証時に対象コミットへ切り替える） | 誰も書かない |
+| integration | `new-worktree.sh <id> integration <hash>` | `task/<id>`（**検証済みコミット** から） | 統括役だけ |
 
-- タスクごとに `docs/handoff/<task-id>.md` を 1 つ作り、各役割は自分の節だけに追記する。
-- 書式は `docs/handoff/TEMPLATE.md` に従う。会話の記憶に頼らず、必要な情報はすべてここに書く。
+- worktree 間で共有されるのは **コミットだけ**。未コミットのファイルは他の役から見えない。
+- 統括役の作業場所（リポジトリ本体）は main のまま。レビューや検証をここで読むと、実装ではなく main を見てしまう。
+- `agent/<id>/implementer` には、implementer 以外は書かない（統括役も書かない）。
+  統括役の記録は、検証済みコミットから分けた `task/<id>` に積む。PR は `task/<id>` から出す。
+
+## 引き継ぎ記録（統括役だけが書く）
+
+- 各役は結果を **返答として** 統括役に返す。ファイルには書かない（reviewer / verifier は書き込み禁止のため）。
+- 統括役が返答を集約し、`docs/handoff/<task-id>.md`（書式は `docs/handoff/TEMPLATE.md`）に記録する。
+- 記録は統合用ブランチ `task/<id>` に統括役がコミットし、PR 本文にも要約を載せる。
+  人は PR だけを見れば、根拠と残る判断をまとめて確認できるようにする。
+- `task/<id>` の、検証済みコミットからの差分は `docs/handoff/<id>.md` だけにする（`git diff --name-only <hash> task/<id>` で確認）。
+  コードの変更が必要になったら、`task/<id>` で直さずに implementer へ差し戻す。
 
 ## コミット規約
 
@@ -47,8 +64,21 @@
 
 ## 統括役（メインセッション）の進め方
 
-1. タスクを受けたら `docs/handoff/<task-id>.md` を作り、受け入れ条件を 3〜5 行で書く。
+1. **受付**: 受け入れ条件（確かめ方つきで 3〜5 行）と触ってよい範囲を決め、引き継ぎ記録を作る。
    受け入れ条件が曖昧な新機能・リファクタ・移行は、先に `grilling` スキルで人に質問し、合意してから書く。
-2. 実装は `implementer`、レビューは `reviewer`、検証は `verifier` サブエージェントに依頼する。依頼文には task-id、worktree のパス、受け入れ条件、触ってよいファイルの範囲を必ず入れる。
-3. `reviewer` と `verifier` の両方が PASS になるまで、差し戻しは最大 2 回まで。3 回目が必要なら止めて人に判断を仰ぐ。
-4. PR を作るのは統括役だけ。マージは人が行う。
+2. **準備**: `scripts/new-worktree.sh <id> implementer` と `scripts/new-worktree.sh <id> verifier`。
+3. **実装**: `implementer` に依頼する。BLOCKED が返ったら、その時点で止めて人に判断を仰ぐ。
+4. **レビュー**: `scripts/new-worktree.sh <id> reviewer <hash>` でレビュー用の作業場所を作り、
+   `reviewer` にそのパスと、implementer が返した HEAD のハッシュを渡す。
+   差し戻し後に再レビューするときは、新しいハッシュで作業場所を作り直す（task-id に `-r2` などを付ける）。
+5. **検証**: `verifier` に、検証用 worktree・同じハッシュ・reviewer の TEST_GAPS を渡す。
+6. **変更なしの確認**: reviewer / verifier の終了後に次を確認する。変化があれば、その結果は採用せずに人へ報告する。
+   - `git -C <reviewer / verifier の worktree> status --porcelain` が空であること
+   - 統括役の作業ツリーの `git status --porcelain` が、依頼前と同じであること
+   - 実装ブランチの HEAD が、依頼時のハッシュから変わっていないこと
+7. **差し戻し**: reviewer が CHANGES_REQUESTED、または verifier が FAIL / FLAKY なら、指摘を添えて implementer に戻す。
+   差し戻しは **最大 2 回**（実装は合計 3 回まで）。3 回目の実装後もどちらかが PASS でなければ止めて、人に判断を仰ぐ。
+   BLOCK / BLOCKED / 品質チェックの未設定（終了コード 2）は、回数に関係なくその場で止める。
+8. **集約と PR**: 両方 PASS になったコミット（検証済みコミット）から `scripts/new-worktree.sh <id> integration <hash>` で
+   `task/<id>` を作り、引き継ぎ記録をコミットする。差分が記録だけであることを確認してから push し、`task/<id>` から **ドラフト PR** を作る。
+   PR 本文は「結論 / 根拠（実行コマンドと結果）/ 未確認事項 / 人の判断が必要なこと」で構成する。マージは人が行う。

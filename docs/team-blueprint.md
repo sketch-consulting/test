@@ -4,7 +4,7 @@
 
 | 項目 | 仮置きした値 |
 |---|---|
-| 技術構成 | 未確定。`scripts/check.sh` は Node（npm scripts）と Python（ruff / mypy / pytest）を自動で検出する |
+| 技術構成 | 未確定。必須の lint・型検査・テストを `scripts/check.config` に書くまで、`scripts/check.sh` は「未設定」（終了コード 2）を返す |
 | 体制 | 開発者 1〜2 名。レビューに使える時間は 1 日 30 分程度 |
 | 安全方針 | 本番環境・本番 DB には触れさせない。マージ・スキーマ変更・課金 API・依存追加はすべて人の承認が必要 |
 
@@ -37,14 +37,17 @@
         依頼/結果    │              │         │
    ┌────────────────▼─┐   ┌────────▼───────┐ ┌▼──────────────────┐
    │ implementer       │   │ reviewer       │ │ verifier          │
-   │ 編集可 / sonnet   │   │ 読み取り専用    │ │ 読み取り専用+実行  │
+   │ 編集可 / sonnet   │   │ 編集ツールなし※ │ │ 編集ツールなし※+実行│
    │ wt/<id>-implementer│  │ / opus         │ │ / sonnet          │
    │ agent/<id>/impl.. │   │ diff を監査     │ │ wt/<id>-verifier  │
    └─────────┬─────────┘   └───────┬────────┘ └─────────┬─────────┘
-             └──────── docs/handoff/<id>.md（共有メモリ）──┘
+             └────────── 結果は返答で統括役へ ──────────┘
+                    （記録 docs/handoff/<id>.md は統括役だけが書く）
 ```
 
-- サブエージェント同士は直接やりとりしません。必ず統括役を経由し、記録は `docs/handoff/<id>.md` に残します。
+- サブエージェント同士は直接やりとりしません。各役は結果を返答で統括役に返し、統括役だけが `docs/handoff/<id>.md` に集約します。
+- worktree 間で共有されるのはコミットだけです。未コミットのファイルは他の役から見えません。
+- ※ reviewer / verifier は Edit / Write を持ちませんが、Bash での書き込みは技術的には防げません。終了後に統括役が `git status` と HEAD で変更なしを確認します（`docs/safety-boundaries.md`）。
 - モデルは費用重視の割り当てです。レビューだけ上位モデルにしています。各エージェント定義の `model:` で変更できます。
 
 ## 3. ワークフロー（受付からマージまで）
@@ -54,10 +57,14 @@
 2. 準備      scripts/new-worktree.sh <id> implementer
              scripts/new-worktree.sh <id> verifier
 3. 実装      implementer: 再現テスト(赤) → 最小修正 → check.sh(緑) → コミット
-4. 相互レビュー reviewer: main...ブランチ の diff を監査 → PASS / CHANGES_REQUESTED / BLOCK
-5. 検証      verifier: check.sh をクリーンな状態から再実行し、例外ケースと main との回帰差分を見る
+4. 相互レビュー 統括役が new-worktree.sh <id> reviewer <hash> で対象コミットに固定した作業場所を作る
+             reviewer: その作業場所で main...<hash> の diff を監査 → PASS / CHANGES_REQUESTED / BLOCK（返答で返す）
+5. 検証      verifier: 対象コミットを detached で取り出し check.sh を再実行。例外ケースと main との回帰差分を見る
+5'. 確認     統括役: reviewer / verifier の終了後、変更が残っていないことを git status と HEAD で確認
 6. 差し戻し   4 か 5 が NG → implementer に戻す（最大 2 回。3 回目は人に判断を仰ぐ）
-7. PR        統括役が push（人の確認あり）して PR を作成。本文は handoff/<id>.md の要約
+7. PR        統括役が new-worktree.sh <id> integration <検証済み hash> で task/<id> を作り、
+             返答を handoff/<id>.md に集約してコミット（差分は記録だけ）。push して task/<id> からドラフト PR を作成。
+             本文は結論・根拠・未確認事項・人の判断が必要なこと。agent/<id>/implementer には統括役も書かない
 8. 承認      人が PR を確認してマージ。worktree を片付ける: git worktree remove ../wt/<id>-*
 ```
 
@@ -67,8 +74,8 @@
 |---|---|---|---|---|
 | Read / Grep / Glob | コードを読む・探す | ○ | ○ | ○ |
 | Edit / Write | ファイルを編集する | ○（自分の worktree のみ） | × | × |
-| Bash | テスト実行・git | ○ | git の読み取りのみ | テスト実行のみ |
-| 共有メモリ | `docs/handoff/<id>.md` | 実装節 | レビュー節 | 検証節 |
+| Bash | テスト実行・git | ○ | git の読み取りのみ（約束） | テスト実行のみ（約束） |
+| 引き継ぎ記録 | `docs/handoff/<id>.md` | 書かない（返答で返す） | 書かない（返答で返す） | 書かない（返答で返す） |
 | MCP: GitHub | Issue の取得・PR の作成 | × | × | × （統括役のみ） |
 | MCP: DB | 調査用の読み取り | × | × | ステージングの読み取り専用のみ |
 | MCP: ブラウザ（Playwright） | 画面の確認 | × | × | ○（ローカル環境のみ） |
@@ -76,10 +83,12 @@
 | スキル: systematic-debugging | 原因特定を先に行うデバッグ手順 | ○ | 参照のみ | 参照のみ |
 | 定期ジョブ | 夜間に `main` で check.sh、失敗したら Issue を起票 | — | — | — |
 
-権限は 3 段階で効かせています。
-1. `.claude/settings.json` の `deny`（rm -rf、強制 push、.env の読み取りなど）と `ask`（push、依存追加、マージ）
-2. `.claude/hooks/guard-bash.sh`（PreToolUse）: deny のパターンをすり抜けた書き方も正規表現で止める
-3. 各エージェントの `tools:` を絞る（reviewer と verifier には Edit / Write を持たせない）
+安全装置は次の層でできていますが、**どれも完全ではありません**。何が設定で止まり、何が約束にとどまるかは `docs/safety-boundaries.md` にまとめています。
+1. `.claude/settings.json` の deny / ask（Bash はコマンドの先頭一致、MCP はツール名で判定）
+2. `.claude/hooks/guard-bash.sh`: 典型的な危険コマンドを文字列で止める補助。スクリプト経由などはすり抜ける
+3. 各エージェントの `tools:`: reviewer と verifier に Edit / Write を渡さない（Bash での書き込みは防げない）
+4. 統括役による事後確認: reviewer / verifier の終了後に変更が残っていないかを確認（防止ではなく検出）
+5. GitHub 側の保護: main への push・マージを確実に止める唯一の層。**現在は未設定**（提案は `docs/safety-boundaries.md` の 4 章）
 
 ## 5. 品質保証の手順
 
@@ -110,21 +119,23 @@
 
 | 日 | やること | 完了の条件 |
 |---|---|---|
-| 1 日目 | CLAUDE.md の「プロジェクト情報」を埋める。`scripts/check.sh` を自分のスタックに合わせる。`main` で通ることを確認する | `scripts/check.sh` が緑 |
+| 1 日目 | CLAUDE.md の「プロジェクト情報」を埋める。`scripts/check.config` に必須の lint・型検査・テストを書く。GitHub の ruleset を設定する | `scripts/check.sh` が終了コード 0 |
 | 2 日目 | フックの動作確認（下の「ここから始める」の手順 3）。implementer だけで小さなバグを 1 件直す | 再現テスト付きの修正コミットが 1 件 |
-| 3 日目 | reviewer と verifier を加え、1 件を通しで回す。指摘の質を見てプロンプトを調整する | handoff に 3 役の記録がそろった PR が 1 件 |
+| 3 日目 | reviewer と verifier を加え、1 件を通しで回す。指摘の質を見てプロンプトを調整する | 統括役が 3 役の返答を集約した handoff 付きのドラフト PR が 1 件 |
 | 4 日目 | 2〜3 件を並行で回す（worktree の分離を確認）。差し戻しの上限が効くことを確認する | ブランチの衝突ゼロ |
 | 5 日目 | 振り返り: 差し戻しの回数、人のレビュー時間、見逃した点。夜間の定期ジョブを設定する。次の用途（セキュリティ監査）を決める | 振り返りメモと次週の計画 |
 
 ## 7. ここから始める
 
+> **注意**: `CLAUDE.md` と `.claude/agents/*.md` は、セッションの開始時に読み込まれます。
+> これらや `.claude/settings.json` を変更したら、新しいセッションを開始してから試してください。
+> 古いセッションのままだと、変更前の手順で動きます（試行記録 `docs/trials/2026-11-03-dry-run.md` で実際に起きた）。
+
 1. `CLAUDE.md` の「プロジェクト情報」の TODO を埋める。
-2. `scripts/check.sh` を実行し、緑になるまで直す。
-3. フックの動作を確認する:
-   ```bash
-   echo '{"tool_input":{"command":"rm -rf build"}}' | .claude/hooks/guard-bash.sh; echo "exit=$?"   # → exit=2
-   echo '{"tool_input":{"command":"git status"}}'   | .claude/hooks/guard-bash.sh; echo "exit=$?"   # → exit=0
-   ```
-4. 小さなバグを 1 つ選び、Claude Code のメインセッションにこう依頼する:
-   > T-001: <バグの症状>。CLAUDE.md の「統括役の進め方」に従って、handoff の作成から PR 作成まで進めてください。マージはしないでください。
-5. PR と `docs/handoff/T-001.md` を読み、3 役の記録と指摘の質を確認してからマージする。
+2. `scripts/check.config` に必須の lint・型検査・テストを書き、`scripts/check.sh` が終了コード 0 になるまで直す。
+3. 安全装置の自己テストを実行する（`jq` が必要）: `scripts/selftest.sh`
+   止められるケースと、止められないケース（限界）の両方が期待どおりかを確かめる。
+4. GitHub 側の保護（`docs/safety-boundaries.md` の 4 章）を設定する。
+5. 小さなバグを 1 つ選び、Claude Code のメインセッションにこう依頼する:
+   > T-001: <バグの症状>。CLAUDE.md の「統括役の進め方」に従って、受け入れ条件の作成からドラフト PR の作成まで進めてください。マージはしないでください。
+6. ドラフト PR の本文と `docs/handoff/T-001.md` で、根拠・未確認事項・判断が必要なことを確認してからマージする。
