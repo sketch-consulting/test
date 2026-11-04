@@ -4,7 +4,13 @@
 # 終了コード
 #   0 … 必須 3 項目がすべて「実行して成功」または「NA:<理由> と明示」
 #   1 … どれかが実行されて失敗した
-#   2 … どれかが未設定（空、NA の理由なし、設定ファイルなし）。成功扱いにはしない
+#   2 … どれかが未設定（空、NA の理由なし、設定ファイルなし）または設定不正。成功扱いにはしない
+#
+# コマンドの書き方
+#   - 1 行の bash コマンド。`bash -euo pipefail -c` で実行するので、
+#     `a && b`、`a; b`、`a | b` のどこで失敗しても全体が失敗になる。
+#   - `||`、`set +e` / `set +o`、`trap` を含むコマンドは「失敗を隠せる」ため設定不正（exit 2）。
+#     失敗を許したい事情があるなら、スクリプトファイルに切り出して人がレビューする。
 #
 # 環境変数 CHECK_CONFIG で設定ファイルの場所を変えられる（自己テスト用）。
 set -uo pipefail
@@ -39,8 +45,13 @@ for key in "${required[@]}"; do
     else result[$key]="対象外（$reason）"; fi
     continue
   fi
+  # 失敗を握りつぶす書き方は設定不正として扱う（実行しない）
+  if printf '%s' "$cmd" | grep -Eq '\|\||(^|[;&[:space:]])(set[[:space:]]+\+[eo]|trap[[:space:]])'; then
+    result[$key]="設定不正（|| や set +e などで失敗を隠す書き方は使えない）"; unconfigured=1; continue
+  fi
   echo "▶ [$name] $cmd"
-  if bash -c "$cmd"; then result[$key]="成功"
+  # -e: 途中のコマンドが失敗したら止める  -u: 未定義変数は失敗  pipefail: パイプ内の失敗を伝える
+  if bash -euo pipefail -c "$cmd"; then result[$key]="成功"
   else result[$key]="失敗"; failed=1; fi
 done
 
